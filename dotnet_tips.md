@@ -33,6 +33,7 @@ Colección consolidada de conceptos, buenas prácticas y preguntas frecuentes de
 - [ASP.NET Core Request Lifecycle](#aspnet-core-request-lifecycle)
 - [CORS en ASP.NET Core](#cors-en-aspnet-core)
 - [Rate Limiting en .NET](#rate-limiting-en-net)
+- [Correlation IDs en ASP.NET Core](#correlation-ids-en-aspnet-core)
 
 ### Ecosystem & Tooling
 - [Paquetes NuGet Recomendados](#paquetes-nuget-recomendados)
@@ -1617,6 +1618,71 @@ app.UseRateLimiter();
 ```
 
 **Diferencia:** Fixed Window puede permitir ráfagas de hasta 2x el límite al cruzar bordes. Sliding Window lo evita distribuyendo el conteo.
+
+---
+
+## Correlation IDs en ASP.NET Core
+
+Un Correlation ID es un identificador único asignado a cada request entrante. Permite trazar esa request a través de todo el sistema (gateway, API, servicios downstream, logs).
+
+### Por Qué Importa
+
+✅ Debugging más rápido
+✅ Log tracing más simple
+✅ Mejor monitoreo
+✅ Root cause analysis simplificado
+✅ Esencial en sistemas distribuidos
+
+### Cómo Funciona
+
+```
+Client → (sin ID) → API Gateway → (ID: abc123) → ASP.NET Core API
+                                                        ├─ ID: abc123 → SQL Database
+                                                        ├─ ID: abc123 → Redis
+                                                        ├─ ID: abc123 → Payment Service
+                                                        └─ ID: abc123 → Email Service
+
+Response ← (Header: X-Correlation-ID: abc123) ← API Gateway
+```
+
+Si tu API llama a otros servicios, propagá el mismo header `X-Correlation-ID` para poder rastrear el request across multiple services.
+
+### Middleware para Generar el Correlation ID
+
+```csharp
+public async Task InvokeAsync(HttpContext context)
+{
+    var correlationId = context.Request.Headers["X-Correlation-ID"]
+        .FirstOrDefault() ?? Guid.NewGuid().ToString();
+
+    context.Items["CorrelationId"] = correlationId;
+    context.Response.Headers["X-Correlation-ID"] = correlationId;
+
+    using (_logger.BeginScope(new Dictionary<string, object>
+    {
+        ["CorrelationId"] = correlationId
+    }))
+    {
+        await _next(context);
+    }
+}
+```
+
+`BeginScope` agrega el `CorrelationId` a todos los logs generados dentro del request, sin tener que pasarlo manualmente a cada llamada de logging.
+
+### Ejemplo de Log Output
+
+```
+2024-05-19 10:15:23 INF [abc123] Request started
+2024-05-19 10:15:23 INF [abc123] Getting customer details
+2024-05-19 10:15:23 INF [abc123] Data fetched from DB
+2024-05-19 10:15:23 INF [abc123] Calling Payment Service
+2024-05-19 10:15:24 INF [abc123] Payment Service responded
+2024-05-19 10:15:24 INF [abc123] Email notification sent
+2024-05-19 10:15:24 INF [abc123] Request completed
+```
+
+Todas las líneas comparten el mismo `abc123`, lo que permite filtrar el log completo de un request específico entre múltiples servicios.
 
 ---
 
