@@ -35,6 +35,15 @@ Colección consolidada de conceptos, buenas prácticas y preguntas frecuentes de
 - [Rate Limiting en .NET](#rate-limiting-en-net)
 - [Correlation IDs en ASP.NET Core](#correlation-ids-en-aspnet-core)
 
+### Cloud Engineering (GCP, Azure, AWS)
+- [Comparativa de Servicios Cloud en .NET](#comparativa-de-servicios-cloud-en-net)
+- [Identidad y Autenticación Passwordless](#identidad-y-autenticacion-passwordless)
+- [Object y Blob Storage en .NET](#object-y-blob-storage-en-net)
+- [Manejo de Secretos y Llaves](#manejo-de-secretos-y-llaves)
+- [Mensajería y Eventos Asíncronos](#mensajería-y-eventos-asincronos)
+- [Health Checks y Resiliencia en Contenedores](#health-checks-y-resiliencia-en-contenedores)
+- [Preguntas de Entrevista sobre Cloud](#preguntas-de-entrevista-sobre-cloud)
+
 ### Ecosystem & Tooling
 - [Paquetes NuGet Recomendados](#paquetes-nuget-recomendados)
 
@@ -1686,6 +1695,252 @@ Todas las líneas comparten el mismo `abc123`, lo que permite filtrar el log com
 
 ---
 
+## Cloud Engineering en .NET — GCP, Azure y AWS
+
+En arquitecturas empresariales modernas, las aplicaciones .NET no se despliegan en servidores aislados, sino en entornos de nube pública. Comprender cómo interactúa .NET con los tres principales proveedores (**Azure**, **AWS** y **GCP**) es un requisito indispensable para roles Senior y de Arquitectura.
+
+El objetivo clave es diseñar código **desacoplado y portable**: usar interfaces y contratos de abstracción (`IBlobStorageService`, `ISecretManagerService`, `IMessageQueueService`) de modo que la lógica de negocio no quede atada a un SDK propietario, facilitando testing, migraciones y despliegues multi-cloud.
+
+---
+
+### Comparativa de Servicios Cloud en .NET
+
+| Categoría | Microsoft Azure | Amazon Web Services (AWS) | Google Cloud Platform (GCP) | Abstracción en .NET |
+|---|---|---|---|---|
+| **Contenedores / CaaS** | Azure Container Apps / App Service | AWS App Runner / ECS Fargate | Google Cloud Run | Dockerfile / .NET Web API |
+| **Kubernetes (K8s)** | Azure Kubernetes Service (AKS) | Elastic Kubernetes Service (EKS) | Google Kubernetes Engine (GKE) | K8s Deployment & Pods |
+| **Serverless Functions** | Azure Functions | AWS Lambda | Cloud Functions | Worker / Serverless SDK |
+| **Object / Blob Storage** | Azure Blob Storage | Amazon Simple Storage Service (S3) | Google Cloud Storage (GCS) | `IBlobStorageService` |
+| **Manejo de Secretos** | Azure Key Vault | AWS Secrets Manager / SSM | Google Secret Manager | `ISecretManagerService` |
+| **Mensajería / Colas** | Azure Service Bus / Storage Queues | Amazon SQS / Amazon SNS | Google Cloud Pub/Sub | `IMessageQueueService` |
+| **Bases de Datos Relacionales** | Azure SQL Database / Flexible Server | Amazon RDS / Aurora | Google Cloud SQL / Spanner | EF Core / Dapper |
+| **Bases de Datos NoSQL** | Azure Cosmos DB | Amazon DynamoDB | Google Firestore / Bigtable | Document Store Client |
+| **Identidad sin Contraseña** | Managed Identity / Entra ID | IAM Roles for Service Accounts (IRSA) | Workload Identity Federation | `ICloudIdentityService` |
+| **Observabilidad / APM** | Application Insights / Azure Monitor | Amazon CloudWatch / AWS X-Ray | Cloud Monitoring / Cloud Trace | OpenTelemetry / ILogger |
+| **SDK Principal en .NET** | `Azure.*` (`Azure.Identity`, etc.) | `AWSSDK.*` (`AWSSDK.S3`, etc.) | `Google.Cloud.*` | DI Abstractions |
+
+---
+
+### Identidad y Autenticación Passwordless
+
+> ⚠️ **Regla de Oro de Seguridad Cloud:** Nunca guardes `ConnectionStrings` con passwords, `AWS_ACCESS_KEY_ID` o archivos JSON de credenciales de servicio en repositorios git ni en imágenes de Docker. Usa siempre **identidades administradas y tokens efímeros**.
+
+#### 1. Azure — DefaultAzureCredential & Managed Identity
+El paquete `Azure.Identity` proporciona `DefaultAzureCredential`, una cadena de resolución automática de credenciales:
+1. Variables de entorno (CI/CD)
+2. Workload Identity (AKS)
+3. Managed Identity (Azure VMs / Container Apps / App Service)
+4. Azure CLI / Visual Studio / PowerShell (Desarrollo local)
+
+```csharp
+// Instalación: dotnet add package Azure.Identity
+using Azure.Identity;
+using Azure.Security.KeyVault.Secrets;
+
+// Autenticación sin passwords ni secrets en código
+var credential = new DefaultAzureCredential();
+var secretClient = new SecretClient(new Uri("https://my-keyvault.vault.azure.net/"), credential);
+KeyVaultSecret secret = await secretClient.GetSecretAsync("DatabaseConnectionString");
+```
+
+#### 2. AWS — IAM Roles for Service Accounts (IRSA)
+En AWS (ECS, EC2 o EKS), el SDK de .NET detecta automáticamente las credenciales asignadas al rol de ejecución mediante el Instance Metadata Service (IMDSv2) o Web Identity Token en Kubernetes:
+
+```csharp
+// Instalación: dotnet add package AWSSDK.S3
+// Registrado en Program.cs con extensión oficial AWSSDK.Extensions.NETCore.Setup:
+builder.Services.AddAWSService<IAmazonS3>();
+
+// El cliente utiliza las credenciales asumidas por IAM sin requerir hardcoding
+public class S3ReportService
+{
+    private readonly IAmazonS3 _s3Client;
+    public S3ReportService(IAmazonS3 s3Client) => _s3Client = s3Client;
+}
+```
+
+#### 3. GCP — Application Default Credentials (ADC) & Workload Identity
+En Google Cloud, `GoogleCredential.GetApplicationDefaultAsync()` busca en la variable `GOOGLE_APPLICATION_CREDENTIALS` (local) o asume la identidad del Service Account asignada en GKE Workload Identity o Cloud Run:
+
+```csharp
+// Instalación: dotnet add package Google.Cloud.SecretManager.V1
+using Google.Cloud.SecretManager.V1;
+
+// Utiliza automáticamente Application Default Credentials (ADC)
+SecretManagerServiceClient client = await SecretManagerServiceClient.CreateAsync();
+AccessSecretVersionResponse response = await client.AccessSecretVersionAsync(
+    new SecretVersionName("my-gcp-project", "DbPassword", "latest"));
+string secretValue = response.Payload.Data.ToStringUtf8();
+```
+
+---
+
+### Object y Blob Storage en .NET
+
+El almacenamiento de objetos maneja archivos no estructurados (imágenes, PDFs, backups). La mejor práctica arquitectónica es definir un contrato único:
+
+```csharp
+public interface IBlobStorageService
+{
+    Task<string> UploadBlobAsync(string bucket, string blobName, Stream content, string contentType, CancellationToken ct = default);
+    Task<Stream?> DownloadBlobAsync(string bucket, string blobName, CancellationToken ct = default);
+    Task<bool> BlobExistsAsync(string bucket, string blobName, CancellationToken ct = default);
+    Task<bool> DeleteBlobAsync(string bucket, string blobName, CancellationToken ct = default);
+}
+```
+
+#### Comparación de Implementaciones:
+- **Azure Blob Storage (`Azure.Storage.Blobs`)**:
+  ```csharp
+  BlobServiceClient client = new(new Uri($"https://{account}.blob.core.windows.net"), new DefaultAzureCredential());
+  var container = client.GetBlobContainerClient(containerName);
+  await container.CreateIfNotExistsAsync();
+  var blob = container.GetBlobClient(blobName);
+  await blob.UploadAsync(contentStream, new BlobHttpHeaders { ContentType = contentType });
+  ```
+
+- **AWS S3 (`AWSSDK.S3`)**:
+  ```csharp
+  var putRequest = new PutObjectRequest
+  {
+      BucketName = bucket,
+      Key = blobName,
+      InputStream = contentStream,
+      ContentType = contentType
+  };
+  await _amazonS3.PutObjectAsync(putRequest, ct);
+  ```
+
+- **GCP Cloud Storage (`Google.Cloud.Storage.V1`)**:
+  ```csharp
+  var client = await StorageClient.CreateAsync();
+  await client.UploadObjectAsync(bucket, blobName, contentType, contentStream, cancellationToken: ct);
+  ```
+
+> 💡 **Tip de Performance:** Siempre sube y descarga archivos usando `Stream` en lugar de `byte[]`. Cargar archivos pesados en arreglos de memoria satura el **Large Object Heap (LOH)** y puede provocar memory leaks y GC pauses.
+
+---
+
+### Manejo de Secretos y Llaves
+
+En ASP.NET Core, los almacenes de secretos en la nube deben integrarse directamente en el árbol de configuración `IConfiguration` durante el arranque:
+
+```csharp
+// Azure Key Vault integrado en IConfiguration
+builder.Configuration.AddAzureKeyVault(
+    new Uri("https://my-keyvault.vault.azure.net/"),
+    new DefaultAzureCredential());
+
+// AWS Secrets Manager integrado en IConfiguration
+builder.Configuration.AddSecretsManager(config =>
+{
+    config.KeyDelimiter = "__";
+});
+
+// Lectura homogénea en el resto de la aplicación
+string dbConn = builder.Configuration["Database:ConnectionString"];
+```
+
+**Ventajas:**
+- Mantiene la separación de responsabilidades: los controladores y servicios no saben de dónde provienen las variables de configuración.
+- Permite rotar credenciales sin necesidad de modificar el código fuente.
+
+---
+
+### Mensajería y Eventos Asíncronos
+
+En microservicios y sistemas distribuidos, la mensajería asíncrona desacopla componentes y absorbe picos de carga:
+
+- **Colas punto a punto (Queue):** Un único consumidor procesa cada mensaje (Azure Service Bus Queue, AWS SQS).
+- **Publicación / Suscripción (Pub/Sub):** Múltiples consumidores reciben una copia del mismo evento (Azure Service Bus Topic, AWS SNS/SQS Fanout, GCP Pub/Sub).
+
+#### Patrón Consumidor en Background con `BackgroundService`:
+
+```csharp
+public class OrderProcessingWorker : BackgroundService
+{
+    private readonly IMessageQueueService _queueService;
+    private readonly ILogger<OrderProcessingWorker> _logger;
+
+    public OrderProcessingWorker(IMessageQueueService queueService, ILogger<OrderProcessingWorker> logger)
+    {
+        _queueService = queueService;
+        _logger = logger;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        _logger.LogInformation("Iniciando escucha de eventos de pedidos...");
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            var messages = await _queueService.ReceiveMessagesAsync<OrderEvent>("orders-queue", maxMessages: 5, stoppingToken);
+
+            foreach (var message in messages)
+            {
+                _logger.LogInformation("Procesando pedido {OrderId} recibido a las {Time}",
+                    message.Payload.OrderId, message.EnqueuedAtUtc);
+            }
+
+            // Evitar tight-loop cuando la cola está vacía
+            await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken);
+        }
+    }
+}
+```
+
+---
+
+### Health Checks y Resiliencia en Contenedores
+
+Los orquestadores como Kubernetes, Azure Container Apps y AWS ECS requieren sondas (probes) HTTP para monitorear el estado de los microservicios:
+
+- **Startup Probe (`/health/startup`):** Indica si la aplicación terminó su inicialización (migraciones EF Core, carga de cachés).
+- **Liveness Probe (`/health/live`):** Indica si el proceso está vivo o si el contenedor debe reiniciarse.
+- **Readiness Probe (`/health/ready`):** Indica si el servicio puede aceptar tráfico entrante (verifica conectividad a Base de Datos, Storage y Secret Vaults).
+
+```csharp
+// Configuración en Program.cs
+builder.Services.AddHealthChecks()
+    .AddCheck<CloudStorageHealthCheck>("storage_check", tags: new[] { "ready" });
+
+var app = builder.Build();
+
+// Endpoints expuestos para Kubernetes
+app.MapHealthChecks("/health/live", new HealthCheckOptions
+{
+    Predicate = _ => false // Solo valida que el proceso HTTP responda
+});
+
+app.MapHealthChecks("/health/ready", new HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("ready") // Valida dependencias de infraestructura
+});
+```
+
+---
+
+### Preguntas de Entrevista sobre Cloud
+
+1. **¿Qué es la autenticación Passwordless y cómo se implementa en .NET?**  
+   Consiste en eliminar contraseñas fijas y connection strings codificadas. Se implementa usando identidades federadas (`DefaultAzureCredential` en Azure, IAM Roles/IRSA en AWS, Workload Identity en GCP), solicitando tokens OAuth2/JWT de corta duración en tiempo de ejecución.
+
+2. **¿Cuál es la diferencia entre Azure Service Bus, AWS SQS y GCP Pub/Sub?**  
+   - AWS SQS es una cola de mensajería altamente escalable (Standard con entrega *al menos una vez* o FIFO con *exactamente una vez*).  
+   - Azure Service Bus es un broker empresarial avanzado con soporte nativo para transacciones, ordenamiento garantizado por sesión y detección de duplicados.  
+   - GCP Pub/Sub es un bus global de distribución de eventos masivo con latencia ultra-baja y modelo de streaming unificado.
+
+3. **¿Cómo evitas memory leaks y LOH pressure al procesar archivos grandes en S3 o Azure Blobs?**  
+   Nunca cargando el archivo completo en un `byte[]` o `MemoryStream` grande (>85 KB). Se debe trabajar siempre mediante `Stream` directo hacia el destino o utilizando `ArrayPool<byte>.Shared` para reutilizar buffers de lectura.
+
+4. **¿Por qué se debe desacoplar el acceso a la nube detrás de interfaces (`IBlobStorageService`)?**  
+   Para permitir pruebas unitarias rápidas mediante mocks o simuladores locales (sin costo ni dependencias de red), facilitar arquitecturas multi-cloud y permitir que los desarrolladores trabajen offline con contenedores locales (como Azurite o LocalStack).
+
+5. **¿Qué diferencia hay entre Liveness y Readiness probes en Kubernetes con .NET?**  
+   Liveness indica si el proceso se trabó (deadlock) y necesita ser matado y reiniciado. Readiness indica si la aplicación está lista para recibir requests de usuarios; si una base de datos o bucket de almacenamiento está temporalmente inaccesible, el readiness probe falla y Kubernetes retira el pod del balanceador sin matarlo.
+
+---
+
 ## Paquetes NuGet Recomendados
 
 Selección consolidada de paquetes del ecosistema .NET para producción. Divididos por categoría según su función principal.
@@ -1945,6 +2200,17 @@ Database            → Index, lazy loading, pagination
 Caching             → MemoryCache / FusionCache, expiración
 Span<T> / AsSpan()  → Zero-alloc parsing, reemplaza Substring en hot paths
 ValueTask           → Zero alloc en sync path (caché)
+```
+
+### Cloud & Multi-Cloud (Azure, AWS, GCP)
+
+```
+Passwordless Auth   → DefaultAzureCredential, IAM IRSA, Workload Identity ADC
+Blob / Object Store → Azure Blob Storage, AWS S3, Google Cloud Storage (Stream, no byte[])
+Secret Vaults       → Key Vault, Secrets Manager, Secret Manager (IConfiguration providers)
+Messaging & Queues  → Service Bus, SQS, Cloud Pub/Sub (BackgroundService workers)
+K8s Probes          → Liveness (restart if deadlock), Readiness (traffic if DB/Storage ready)
+SDKs                → Azure.*, AWSSDK.*, Google.Cloud.* (Always wrap in DI abstractions)
 ```
 
 ### Ecosystem — Paquetes Clave

@@ -1,0 +1,18 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\DotNetMastery.Core\DotNetMastery.Core.csproj" />
+    <ProjectReference Include="..\DotNetMastery.Patterns\DotNetMastery.Patterns.csproj" />
+    <ProjectReference Include="..\DotNetMastery.DataAndAsync\DotNetMastery.DataAndAsync.csproj" />
+    <ProjectReference Include="..\DotNetMastery.Performance\DotNetMastery.Performance.csproj" />
+    <ProjectReference Include="..\DotNetMastery.Cloud\DotNetMastery.Cloud.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net11.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

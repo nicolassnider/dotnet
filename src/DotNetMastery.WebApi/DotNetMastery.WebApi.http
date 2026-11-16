@@ -1,0 +1,11 @@
+@DotNetMastery.WebApi_HostAddress = http://localhost:5268
+
+GET {{DotNetMastery.WebApi_HostAddress}}/openapi/v1.json
+Accept: application/json
+
+###
+
+GET {{DotNetMastery.WebApi_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
