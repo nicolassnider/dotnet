@@ -44,6 +44,15 @@ Colección consolidada de conceptos, buenas prácticas y preguntas frecuentes de
 - [Health Checks y Resiliencia en Contenedores](#health-checks-y-resiliencia-en-contenedores)
 - [Preguntas de Entrevista sobre Cloud](#preguntas-de-entrevista-sobre-cloud)
 
+### Security & Identity (OAuth 2.0 & OWASP)
+- [OAuth 2.0 y OpenID Connect (OIDC) en .NET](#oauth-20-y-openid-connect-oidc-en-net)
+- [Estructura y Validación de JWT](#estructura-y-validación-de-jwt)
+- [Autorización Basada en Roles y Políticas](#autorización-basada-en-roles-y-políticas)
+- [OWASP Top 10 — Mitigaciones en .NET y C#](#owasp-top-10--mitigaciones-en-net-y-c)
+- [Headers de Seguridad HTTP (Defense-in-Depth)](#headers-de-seguridad-http-defense-in-depth)
+- [Hashing Seguro de Contraseñas (PBKDF2)](#hashing-seguro-de-contraseñas-pbkdf2)
+- [Preguntas de Entrevista sobre OAuth y OWASP](#preguntas-de-entrevista-sobre-oauth-y-owasp)
+
 ### Ecosystem & Tooling
 - [Paquetes NuGet Recomendados](#paquetes-nuget-recomendados)
 
@@ -1941,6 +1950,246 @@ app.MapHealthChecks("/health/ready", new HealthCheckOptions
 
 ---
 
+## Security & Identity — OAuth 2.0, OIDC y OWASP Top 10 en .NET
+
+La seguridad en aplicaciones empresariales y APIs en .NET abarca dos pilares complementarios: **Identidad y Acceso** (mediante OAuth 2.0 y OpenID Connect) y **Defensa contra Vulnerabilidades** (mitigación sistemática del OWASP Top 10).
+
+---
+
+### OAuth 2.0 y OpenID Connect (OIDC) en .NET
+
+| Concepto | OAuth 2.0 | OpenID Connect (OIDC) |
+|---|---|---|
+| **Propósito** | **Autorización Delegada** (¿Qué permisos tiene el cliente?) | **Autenticación Federada** (¿Quién es el usuario?) |
+| **Token Principal** | **Access Token** (usualmente JWT o Reference Token opaco) | **ID Token** (siempre JWT firmado) |
+| **Audiencia** | Consumido por la **API protegida (Resource Server)** | Consumido por el **Cliente (Frontend / App móvil)** |
+| **Casos de Uso** | Llamadas HTTP con header `Authorization: Bearer <token>` | Inicio de sesión, perfil del usuario (`/userinfo`) |
+
+#### Flujos Clave (Grant Types) en .NET:
+1. **Authorization Code Flow con PKCE (Proof Key for Code Exchange):**
+   - El estándar obligatorio para aplicaciones web (SPAs con Angular/React/Blazor), apps móviles y de escritorio.
+   - Evita el robo del authorization code mediante un código criptográfico verificado (`code_verifier` y `code_challenge`).
+   - Reemplaza por completo el obsoleto e inseguro *Implicit Flow*.
+2. **Client Credentials Flow:**
+   - Para comunicación máquina a máquina (M2M) entre microservicios o workers en background sin intervención de un usuario interactivo.
+   - El servicio se autentica directamente con su `client_id` y `client_secret` (o certificado mTLS) contra el Identity Provider (IdP) como Microsoft Entra ID, Auth0, Keycloak o Duende IdentityServer.
+3. **Refresh Tokens:**
+   - Permiten renovar Access Tokens expirados sin requerir que el usuario vuelva a ingresar credenciales.
+   - En producción, debe aplicarse **Refresh Token Rotation**: cada uso de un refresh token invalida el anterior y emite uno nuevo, detectando automáticamente intentos de reutilización maliciosa.
+
+---
+
+### Estructura y Validación de JWT
+
+Un JSON Web Token (JWT) consta de tres partes separadas por puntos codificadas en Base64URL: `Header.Payload.Signature`.
+
+```
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyXzQyIiwiZW1haWwiOiJhbGljZUBleGFtcGxlLmNvbSIsInJvbGUiOiJBZG1pbiIsImV4cCI6MTc5NzI3MjAwMH0.abcdef...
+ └───────────── Header ─────────────┘ └──────────────────────── Payload (Claims) ────────────────────────┘ └──────── Signature ────────┘
+```
+
+#### Configuración Segura de Validación en ASP.NET Core:
+
+```csharp
+// Instalación: dotnet add package Microsoft.AspNetCore.Authentication.JwtBearer
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.RequireHttpsMetadata = true; // Forzar HTTPS en producción
+        options.SaveToken = true;
+
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]!)),
+
+            ValidateIssuer = true,
+            ValidIssuer = builder.Configuration["Jwt:Issuer"],
+
+            ValidateAudience = true,
+            ValidAudience = builder.Configuration["Jwt:Audience"],
+
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.Zero // Elimina el margen de tolerancia predeterminado de 5 minutos
+        };
+    });
+
+builder.Services.AddAuthorization();
+```
+
+> ⚠️ **Regla Crítica:** En el pipeline de middleware, `app.UseAuthentication()` debe ejecutarse **estrictamente antes** de `app.UseAuthorization()`. De lo contrario, las comprobaciones de permisos evaluarán un `ClaimsPrincipal` anónimo y denegarán toda petición.
+
+---
+
+### Autorización Basada en Roles y Políticas
+
+#### 1. Roles (RBAC Básico):
+```csharp
+[Authorize(Roles = "Admin,Manager")]
+[HttpGet("/api/reports")]
+public IActionResult GetReports() => Ok();
+```
+
+#### 2. Políticas (Policy-Based Authorization con Requisitos Personalizados):
+Permite validar múltiples claims y reglas de negocio dinámicas (e.g. acceso por inquilino o antigüedad):
+
+```csharp
+// Registro en Program.cs
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("CanManageTenant", policy =>
+        policy.RequireAuthenticatedUser()
+              .RequireClaim("tenant_id")
+              .RequireRole("Admin"));
+});
+
+// Uso en Controller o Minimal API
+[Authorize(Policy = "CanManageTenant")]
+[HttpPost("/api/tenants/{id}/settings")]
+public IActionResult UpdateTenantSettings(string id) => Ok();
+```
+
+---
+
+### OWASP Top 10 — Mitigaciones en .NET y C#
+
+#### A01: Broken Access Control (BOLA / IDOR)
+- **Vulnerabilidad:** Un atacante cambia el ID en la URL (`/api/documents/105` → `/api/documents/106`) y accede a datos ajenos porque la API no verifica la propiedad del recurso.
+- **Mitigación en .NET:** Siempre validar que el usuario autenticado (`User.FindFirstValue(ClaimTypes.NameIdentifier)`) sea el dueño legítimo del recurso antes de retornarlo o modificarlo.
+
+```csharp
+[HttpGet("/api/documents/{id}")]
+[Authorize]
+public async Task<IActionResult> GetDocument(int id)
+{
+    var document = await _db.Documents.FindAsync(id);
+    if (document == null) return NotFound();
+
+    string currentUserId = User.FindFirstValue(ClaimTypes.NameIdentifier)!;
+
+    // Validación estricta de propiedad
+    if (document.OwnerUserId != currentUserId && !User.IsInRole("Admin"))
+    {
+        return Forbid(); // 403 Forbidden
+    }
+
+    return Ok(document);
+}
+```
+
+#### A02: Cryptographic Failures
+- **Vulnerabilidad:** Guardar contraseñas en texto plano o con algoritmos obsoletos (MD5, SHA1, SHA256 sin salt).
+- **Mitigación en .NET:** Utilizar funciones de derivación de claves diseñadas para contraseñas (**PBKDF2**, Argon2 o BCrypt) con sales criptográficamente aleatorios (CSPRNG) y comparación en tiempo constante (`CryptographicOperations.FixedTimeEquals`).
+
+```csharp
+using System.Security.Cryptography;
+
+public static class PasswordSecurity
+{
+    public static byte[] HashPasswordPbkdf2(string password, byte[] salt)
+    {
+        return Rfc2898DeriveBytes.Pbkdf2(
+            password: password,
+            salt: salt,
+            iterations: 100_000,
+            hashAlgorithm: HashAlgorithmName.SHA512,
+            outputLength: 32);
+    }
+}
+```
+
+#### A03: Injection (SQL Injection)
+- **Vulnerabilidad:** Concatenación de cadenas no sanitizadas en consultas SQL.
+- **Mitigación en .NET:** Usar siempre Entity Framework Core o Dapper con consultas parametrizadas. Los parámetros nunca se evalúan como código SQL ejecutable.
+
+```csharp
+// ❌ VULNERABLE: Inyección de SQL
+string raw = $"SELECT * FROM Users WHERE Email = '{input}'";
+_context.Database.ExecuteSqlRaw(raw);
+
+// ✅ SEGURO: Parámetros compilados
+var user = await _context.Users.FirstOrDefaultAsync(u => u.Email == input);
+
+// ✅ SEGURO con SQL crudo (FromSqlInterpolated parametriza automáticamente)
+var user = await _context.Users
+    .FromSqlInterpolated($"SELECT * FROM Users WHERE Email = {input}")
+    .FirstOrDefaultAsync();
+```
+
+#### A05: Security Misconfiguration
+- Deshabilitar Swagger / OpenAPI en entornos productivos no protegidos.
+- Evitar exponer trazas de excepciones (`UseDeveloperExceptionPage` debe estar restringido a `Environment.IsDevelopment()`).
+- Inyectar encabezados de seguridad HTTP.
+
+#### A08: Software and Data Integrity Failures
+- **Vulnerabilidad:** Uso de deserializadores binarios peligrosos (`BinaryFormatter`), que permiten ejecución remota de código (RCE).
+- **Mitigación en .NET:** `BinaryFormatter` está obsoleto y **totalmente deshabilitado por defecto en .NET 9+**. Usar siempre `System.Text.Json` de forma segura.
+
+#### A10: Server-Side Request Forgery (SSRF)
+- **Vulnerabilidad:** Un atacante induce a la API a realizar peticiones HTTP hacia recursos internos protegidos, como el endpoint de metadatos de la nube (`http://169.254.169.254`) o bases de datos internas.
+- **Mitigación en .NET:** Validar esquemas (solo `https`), mantener listas de dominios permitidos (allowlists) y bloquear rangos privados (RFC 1918) y link-local / metadata IPs antes de invocar `HttpClient`.
+
+---
+
+### Headers de Seguridad HTTP (Defense-in-Depth)
+
+Implementar un middleware personalizado que agregue encabezados defensivos a todas las respuestas HTTP:
+
+```csharp
+public class SecurityHeadersMiddleware
+{
+    private readonly RequestDelegate _next;
+    public SecurityHeadersMiddleware(RequestDelegate next) => _next = next;
+
+    public async Task InvokeAsync(HttpContext context)
+    {
+        context.Response.OnStarting(() =>
+        {
+            var headers = context.Response.Headers;
+            headers["X-Content-Type-Options"] = "nosniff";                     // Bloquea sniffing de MIME
+            headers["X-Frame-Options"] = "DENY";                              // Bloquea Clickjacking
+            headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
+            headers["Content-Security-Policy"] = "default-src 'self';";        // Restringe orígenes de scripts
+            headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"; // Fuerza HTTPS
+            
+            headers.Remove("Server");                                         // Oculta versión de Kestrel
+            headers.Remove("X-Powered-By");
+
+            return Task.CompletedTask;
+        });
+
+        await _next(context);
+    }
+}
+```
+
+---
+
+### Preguntas de Entrevista sobre OAuth y OWASP
+
+1. **¿Cuál es la diferencia entre OAuth 2.0 y OpenID Connect?**  
+   OAuth 2.0 es un framework de autorización para permitir que una aplicación acceda a recursos en nombre de un usuario mediante un Access Token. OIDC es una capa de autenticación construida encima de OAuth 2.0 que valida la identidad del usuario y emite un ID Token tipado.
+
+2. **¿Por qué se debe usar PKCE en el flujo Authorization Code?**  
+   PKCE (Proof Key for Code Exchange) protege aplicaciones públicas (donde el `client_secret` no puede ser protegido en el cliente) contra la intercepción del código de autorización, ligando el canje del código al secreto temporal `code_verifier` generado originalmente por el cliente.
+
+3. **¿Qué es BOLA / IDOR y cómo se evita en ASP.NET Core?**  
+   Broken Object-Level Authorization ocurre cuando la API expone un identificador interno de objeto y confía ciegamente en que el cliente tiene derecho a acceder a él. Se previene verificando en la capa de servicio o controlador que el `UserId` del token coincida con el dueño del registro antes de devolver datos o ejecutar acciones.
+
+4. **¿Por qué no se debe usar SHA-256 directo para hashear contraseñas?**  
+   SHA-256 es una función de hash criptográfico diseñada para ser ultra-rápida. Un atacante con GPUs modernas puede computar miles de millones de hashes por segundo mediante tablas rainbow o fuerza bruta. Se deben usar algoritmos lentos y adaptativos (**PBKDF2**, Argon2, BCrypt) con sales aleatorios por usuario para mitigar ataques masivos.
+
+5. **¿Qué es SSRF y cómo se previene al hacer llamadas con `HttpClient`?**  
+   Server-Side Request Forgery permite a un atacante usar el servidor vulnerable como proxy para atacar redes privadas o acceder a metadatos de la nube (`169.254.169.254`). Se previene validando y resolviendo la IP de destino antes de conectar, bloqueando IPs de loopback y rangos privados.
+
+6. **¿Por qué `ClockSkew = TimeSpan.Zero` es importante en `TokenValidationParameters`?**  
+   Por defecto, ASP.NET Core otorga 5 minutos de tolerancia para compensar desfases de reloj entre servidores. En entornos donde un token expirado debe ser rechazado de inmediato, dejar el valor default permite que tokens vencidos sigan siendo válidos durante 300 segundos adicionales.
+
+---
+
 ## Paquetes NuGet Recomendados
 
 Selección consolidada de paquetes del ecosistema .NET para producción. Divididos por categoría según su función principal.
@@ -2211,6 +2460,20 @@ Secret Vaults       → Key Vault, Secrets Manager, Secret Manager (IConfigurati
 Messaging & Queues  → Service Bus, SQS, Cloud Pub/Sub (BackgroundService workers)
 K8s Probes          → Liveness (restart if deadlock), Readiness (traffic if DB/Storage ready)
 SDKs                → Azure.*, AWSSDK.*, Google.Cloud.* (Always wrap in DI abstractions)
+```
+
+### Security & Identity (OAuth 2.0 & OWASP)
+
+```
+OAuth 2.0 vs OIDC   → OAuth = Authorization (Access Token), OIDC = Authentication (ID Token)
+PKCE Flow           → Mandatory for SPAs & Mobile (replaces deprecated Implicit Flow)
+JWT Bearer          → Header.Payload.Signature; ValidateIssuer, Audience, Lifetime, ClockSkew=0
+Middleware Order    → UseAuthentication() MUST run before UseAuthorization()
+BOLA / IDOR         → Always check resource ownership (document.UserId == currentUserId)
+Password Hashing    → PBKDF2 (Rfc2898DeriveBytes) with CSPRNG salt & FixedTimeEquals
+SQL Injection       → FormattableString / Parameterized queries, NEVER string interpolation
+SSRF Mitigation     → Validate scheme (HTTPS only), block 127.0.0.1, private IPs & 169.254.169.254
+Security Headers    → X-Content-Type-Options: nosniff, X-Frame-Options: DENY, HSTS, CSP
 ```
 
 ### Ecosystem — Paquetes Clave

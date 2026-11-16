@@ -20,7 +20,7 @@ This repository is an educational and architectural reference solution implement
    - `DotNetMastery.DataAndAsync`: Collections, LINQ optimizations (CountBy, OrderBy/ThenBy), the 11 Async Rules, and ValueTask hot-path caching.
    - `DotNetMastery.Performance`: Memory leak prevention, ArrayPool for LOH, Span<T> zero-allocation parsing.
    - `DotNetMastery.Cloud`: Multi-cloud abstractions and client implementations for Azure, AWS, and GCP (Storage, Secrets, Messaging, Identity, K8s Health Checks).
-   - `DotNetMastery.WebApi`: ASP.NET Core request lifecycle, custom Correlation ID middleware, secure CORS, native rate limiting, and DI lifecycles.
+   - `DotNetMastery.WebApi`: ASP.NET Core request lifecycle, OAuth 2.0 / JWT authentication, OWASP security headers & mitigations (BOLA/IDOR, SSRF), custom Correlation ID middleware, secure CORS, native rate limiting, and DI lifecycles.
    - `DotNetMastery.Cli`: Interactive console runner with micro-benchmarks.
    - `DotNetMastery.Tests`: xUnit tests for all features and WebApplicationFactory integration tests.
 

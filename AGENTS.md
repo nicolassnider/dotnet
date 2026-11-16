@@ -28,8 +28,11 @@ DotNetMastery/
 │   │   │   └── KeywordsDemo.cs        # ref/out, const/readonly, var/dynamic, yield, Equals/==, enum/nameof
 │   │   ├── Delegates/
 │   │   │   └── DelegatesAndLambdasDemo.cs # Action, Func, Predicate, Multicast, Delegates vs Events
-│   │   └── CleanCode/
-│   │       └── CleanCodePrinciples.cs # KISS, Clever vs Maintainable, Vertical coding style
+│   │   ├── CleanCode/
+│   │   │   └── CleanCodePrinciples.cs # KISS, Clever vs Maintainable, Vertical coding style
+│   │   └── Security/
+│   │       ├── PasswordHasher.cs      # PBKDF2 password hashing with CSPRNG salt & FixedTimeEquals
+│   │       └── OwaspMitigations.cs    # IDOR, Parameterized queries, SSRF IP validation
 │   │
 │   ├── DotNetMastery.Patterns/        # Top 5 Design Patterns in .NET
 │   │   ├── DependencyInjection/
@@ -67,14 +70,18 @@ DotNetMastery/
 │   ├── DotNetMastery.WebApi/          # ASP.NET Core Web API architecture & best practices
 │   │   ├── Middleware/
 │   │   │   └── CorrelationIdMiddleware.cs # X-Correlation-ID extraction, propagation, and logger scope
+│   │   ├── Security/
+│   │   │   ├── JwtTokenService.cs     # OAuth 2.0 / JWT issuance & cryptographic validation
+│   │   │   └── SecurityHeadersMiddleware.cs # OWASP security headers (CSP, HSTS, X-Content-Type)
 │   │   ├── Services/
 │   │   │   └── DiLifecycleServices.cs # Transient, Scoped, and Singleton service interfaces and implementation
 │   │   ├── Models/
 │   │   │   └── CreateUserRequest.cs   # DTOs with DataAnnotations model validation
 │   │   ├── Controllers/
+│   │   │   ├── AuthController.cs      # Login, JWT protected endpoints, IDOR & SSRF defenses
 │   │   │   ├── UsersController.cs     # RESTful CRUD operations with validation
 │   │   │   └── DiLifecycleController.cs # Endpoint exposing DI lifecycle behavior and instance IDs
-│   │   └── Program.cs                 # Pipeline configuration (CORS, Rate Limiting, Correlation ID, Routing)
+│   │   └── Program.cs                 # Pipeline configuration (JWT, CORS, Rate Limiting, Correlation ID, Routing)
 │   │
 │   └── DotNetMastery.Cli/             # Interactive console showcase application
 │       └── Program.cs                 # Interactive runner with micro-benchmarks and topic demonstrations
@@ -86,6 +93,7 @@ DotNetMastery/
         ├── DataAndAsyncTests.cs       # Tests for LINQ rules, 11 Async rules, and ValueTask
         ├── PerformanceTests.cs        # Tests for memory leak fixes, bounded cache, and Span parsing
         ├── CloudTests.cs              # Multi-cloud tests for Azure, AWS, and GCP implementations
+        ├── SecurityTests.cs           # Tests for JWT, PBKDF2 hashing, IDOR, SSRF, and OWASP headers
         └── WebApiTests.cs             # Integration tests (WebApplicationFactory) for Web API endpoints
 ```
 
@@ -142,6 +150,9 @@ dotnet run --project src/DotNetMastery.WebApi
 | **Cloud Engineering (Azure, AWS, GCP Storage)** | `src/DotNetMastery.Cloud/` | `CloudTests.cs` |
 | **Cloud Secrets & Passwordless Identity** | `src/DotNetMastery.Cloud/` | `CloudTests.cs` |
 | **Cloud Messaging & K8s Health Checks** | `src/DotNetMastery.Cloud/` | `CloudTests.cs` |
+| **OAuth 2.0, OIDC & JWT Bearer Auth** | `src/DotNetMastery.WebApi/Security/JwtTokenService.cs` | `SecurityTests.cs` |
+| **OWASP Top 10 (IDOR, Injection, SSRF, Headers)** | `src/DotNetMastery.Core/Security/OwaspMitigations.cs` | `SecurityTests.cs` |
+| **Password Hashing (PBKDF2 & Constant-Time)** | `src/DotNetMastery.Core/Security/PasswordHasher.cs` | `SecurityTests.cs` |
 
 ---
 

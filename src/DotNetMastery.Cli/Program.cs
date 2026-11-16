@@ -14,6 +14,8 @@ using DotNetMastery.Performance.Span;
 using Microsoft.EntityFrameworkCore;
 using DotNetMastery.Cloud.Abstractions;
 using DotNetMastery.Cloud.Factory;
+using DotNetMastery.Core.Security;
+using DotNetMastery.WebApi.Security;
 using Microsoft.Extensions.Caching.Memory;
 
 Console.ForegroundColor = ConsoleColor.Cyan;
@@ -37,9 +39,10 @@ while (true)
     Console.WriteLine("  3. Data & Async (Collections, LINQ, 11 Async Rules, ValueTask)");
     Console.WriteLine("  4. Performance & Memory (Memory Leaks, ArrayPool, Span vs Substring)");
     Console.WriteLine("  5. Cloud Engineering (Azure, AWS, GCP basics & multi-cloud abstractions)");
-    Console.WriteLine("  6. Run ALL Demonstrations");
+    Console.WriteLine("  6. Security (OAuth 2.0 / JWT, Password Hashing, OWASP Mitigations)");
+    Console.WriteLine("  7. Run ALL Demonstrations");
     Console.WriteLine("  0. Exit");
-    Console.Write("\nEnter choice [0-6]: ");
+    Console.Write("\nEnter choice [0-7]: ");
 
     var input = Console.ReadLine()?.Trim();
     Console.WriteLine();
@@ -62,13 +65,16 @@ while (true)
             await RunCloudEngineeringDemoAsync();
             break;
         case "6":
+            RunSecurityDemo();
+            break;
+        case "7":
             await RunAllDemosAsync();
             break;
         case "0" or "exit" or "q":
             Console.WriteLine("Exiting. Keep mastering .NET!");
             return;
         default:
-            Console.WriteLine("Invalid option, please choose between 0 and 6.");
+            Console.WriteLine("Invalid option, please choose between 0 and 7.");
             break;
     }
 }
@@ -80,6 +86,7 @@ async Task RunAllDemosAsync()
     await RunDataAndAsyncDemoAsync();
     await RunPerformanceAndMemoryDemoAsync();
     await RunCloudEngineeringDemoAsync();
+    RunSecurityDemo();
     Console.ForegroundColor = ConsoleColor.Green;
     Console.WriteLine("\n[✔] All demonstrations completed successfully!");
     Console.ResetColor();
@@ -328,4 +335,36 @@ async Task RunCloudEngineeringDemoAsync()
         var token = await identity.AcquireTokenAsync("https://cloud.api/.default");
         Console.WriteLine($"   [{provider}] IdP: {token.IdentityProvider} | Principal: {token.PrincipalId}");
     }
+}
+
+void RunSecurityDemo()
+{
+    PrintSectionHeader("OAuth 2.0 & OWASP Top 10 Security");
+
+    // 1. Password Hashing (PBKDF2 with CSPRNG Salt)
+    string password = "SuperSecretPassword2026!";
+    string hash = PasswordHasher.HashPassword(password);
+    bool valid = PasswordHasher.VerifyPassword(password, hash);
+    bool invalid = PasswordHasher.VerifyPassword("WrongPassword", hash);
+    Console.WriteLine($"[OWASP A02 - Cryptography] PBKDF2 Password Hashed: {hash[..32]}... Valid: {valid}, Invalid Rejected: {!invalid}");
+
+    // 2. OAuth 2.0 / JWT Generation & Validation
+    var jwtService = new JwtTokenService();
+    string token = jwtService.GenerateToken("user_42", "alice@example.com", ["Admin", "User"]);
+    var principal = jwtService.ValidateToken(token);
+    Console.WriteLine($"[OAuth 2.0 - JWT] Generated signed token for: {principal?.Identity?.Name ?? "alice@example.com"}");
+    Console.WriteLine($"   Issuer: {jwtService.Issuer} | Audience: {jwtService.Audience} | IsAdmin: {principal?.IsInRole("Admin")}");
+
+    // 3. OWASP A01: Broken Access Control (IDOR Mitigation)
+    var doc = new OwaspMitigations.DocumentRecord(101, "user_alice", "Quarterly Financials");
+    bool aliceAccess = OwaspMitigations.CanAccessDocument(doc, "user_alice", ["User"]);
+    bool attackerAccess = OwaspMitigations.CanAccessDocument(doc, "user_eve", ["User"]);
+    bool adminAccess = OwaspMitigations.CanAccessDocument(doc, "user_eve", ["Admin"]);
+    Console.WriteLine($"[OWASP A01 - IDOR Defense] Owner Access: {aliceAccess}, Unauthorized Cross-User Access: {attackerAccess}, Admin Access: {adminAccess}");
+
+    // 4. OWASP A10: Server-Side Request Forgery (SSRF Protection)
+    string safeUrl = "https://api.github.com/events";
+    string dangerousUrl = "https://169.254.169.254/latest/meta-data/";
+    Console.WriteLine($"[OWASP A10 - SSRF Defense] URL '{safeUrl}' Safe: {OwaspMitigations.IsSafeOutboundUrl(safeUrl)}");
+    Console.WriteLine($"[OWASP A10 - SSRF Defense] URL '{dangerousUrl}' Blocked: {!OwaspMitigations.IsSafeOutboundUrl(dangerousUrl)}");
 }

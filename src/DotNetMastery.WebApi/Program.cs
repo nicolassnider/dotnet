@@ -1,7 +1,10 @@
 using System.Threading.RateLimiting;
 using DotNetMastery.WebApi.Middleware;
+using DotNetMastery.WebApi.Security;
 using DotNetMastery.WebApi.Services;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.IdentityModel.Tokens;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -12,6 +15,35 @@ var builder = WebApplication.CreateBuilder(args);
 // Add Controllers & OpenAPI
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
+
+// Register OAuth / JWT Token Service
+var jwtTokenService = new JwtTokenService();
+builder.Services.AddSingleton(jwtTokenService);
+
+// Register Authentication with JWT Bearer
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
+{
+    options.RequireHttpsMetadata = false; // Set to true in production
+    options.SaveToken = true;
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuerSigningKey = true,
+        IssuerSigningKey = jwtTokenService.SigningKey,
+        ValidateIssuer = true,
+        ValidIssuer = jwtTokenService.Issuer,
+        ValidateAudience = true,
+        ValidAudience = jwtTokenService.Audience,
+        ValidateLifetime = true,
+        ClockSkew = TimeSpan.Zero
+    };
+});
+
+builder.Services.AddAuthorization();
 
 // Register DI Lifecycles Demonstration
 builder.Services.AddTransient<ITransientOperation, OperationService>();
@@ -79,19 +111,26 @@ if (app.Environment.IsDevelopment())
 // 2. HTTPS Redirection
 app.UseHttpsRedirection();
 
-// 3. Routing
+// 3. OWASP Security Headers (Defense-in-Depth)
+app.UseMiddleware<SecurityHeadersMiddleware>();
+
+// 4. Routing
 app.UseRouting();
 
-// 4. CORS
+// 5. CORS
 app.UseCors("SecurePolicy");
 
-// 5. Rate Limiting
+// 6. Rate Limiting
 app.UseRateLimiter();
 
-// 6. Custom Correlation ID Middleware
+// 7. Authentication & Authorization (Order is critical: AuthN before AuthZ)
+app.UseAuthentication();
+app.UseAuthorization();
+
+// 8. Custom Correlation ID Middleware
 app.UseMiddleware<CorrelationIdMiddleware>();
 
-// 7. Map Endpoints
+// 9. Map Endpoints
 app.MapControllers();
 
 // Rate-limited demo endpoints
@@ -105,7 +144,7 @@ app.MapGet("/", () => Results.Ok(new
 {
     title = ".NET Mastery API",
     status = "Healthy",
-    features = new[] { "CorrelationId", "RateLimiting", "DILifecycles", "ModelValidation", "SecureCORS" }
+    features = new[] { "OAuth2/OIDC", "OWASP_Headers", "CorrelationId", "RateLimiting", "DILifecycles", "ModelValidation", "SecureCORS" }
 }));
 
 app.Run();

@@ -6,6 +6,7 @@
     <ProjectReference Include="..\DotNetMastery.DataAndAsync\DotNetMastery.DataAndAsync.csproj" />
     <ProjectReference Include="..\DotNetMastery.Performance\DotNetMastery.Performance.csproj" />
     <ProjectReference Include="..\DotNetMastery.Cloud\DotNetMastery.Cloud.csproj" />
+    <ProjectReference Include="..\DotNetMastery.WebApi\DotNetMastery.WebApi.csproj" />
   </ItemGroup>
 
   <PropertyGroup>
